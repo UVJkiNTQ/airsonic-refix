@@ -21,9 +21,10 @@
                      class="form-control" :class="{'is-invalid': hasError}">
             </div>
             <div class="mb-3">
-              <label class="form-label">Password</label>
+              <label class="form-label">Password / API Key</label>
               <input v-model="password" name="password" type="password"
-                     class="form-control" :class="{'is-invalid': hasError}">
+                     class="form-control" :class="{'is-invalid': hasError}"
+                     placeholder="Password or API key (starts with ap_)">
             </div>
             <div v-if="error != null" class="alert alert-danger">
               Could not log in. ({{ error.message }})

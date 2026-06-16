@@ -133,23 +133,16 @@ export class API {
 
   constructor(private auth: AuthService) {
     this.fetch = (path: string, params: any) => {
-      params = { ...params, v: '1.15.0', f: 'json', c: this.clientName }
+      params = { ...params, v: '1.16.1', f: 'json', c: this.clientName }
 
-      const request = auth.serverInfo?.extensions.includes('formPost')
-        ? new Request(`${this.auth.server}/${path}`, {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: `${toQueryString(params)}&${this.auth.urlParams}`
-        })
-        : new Request(`${this.auth.server}/${path}?${toQueryString(params)}&${this.auth.urlParams}`, {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-          }
-        })
+      // Always use GET — POST (formPost) triggers CSRF on airsonic-pulse
+      const request = new Request(`${this.auth.server}/${path}?${toQueryString(params)}&${this.auth.urlParams}`, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          ...this.auth.authHeaders,
+        }
+      })
 
       return window
         .fetch(request)
@@ -227,8 +220,25 @@ export class API {
 
     const params = { type, offset, size }
     const response = await this.fetch('rest/getAlbumList2', params)
-    const albums = response.albumList2?.album || []
-    return albums.map(this.normalizeAlbum, this)
+    const albums: Album[] = (response.albumList2?.album || []).map(this.normalizeAlbum, this)
+
+    // For albums without cover art, fetch songs in parallel to get first song ID
+    const needCovers = albums.filter(a => !a.image)
+    if (needCovers.length > 0) {
+      const details = await Promise.allSettled(
+        needCovers.map(a => this.fetch('rest/getAlbum', { id: a.id }).catch(() => null))
+      )
+      details.forEach((d, i) => {
+        if (d.status === 'fulfilled' && d.value) {
+          const firstSongId = d.value.album?.song?.[0]?.id
+          if (firstSongId) {
+            needCovers[i].image = this.getCoverArtUrl({ coverArt: firstSongId })
+          }
+        }
+      })
+    }
+
+    return albums
   }
 
   async getArtistDetails(id: string): Promise<Artist> {
@@ -566,6 +576,7 @@ export class API {
         ? item.artists
         : [{ id: item.artistId, name: item.artist }],
       url: this.getStreamUrl(item.id),
+      // Song coverArt from API (verified same as native WebUI)
       image: this.getCoverArtUrl(item),
       replayGain,
     }
@@ -582,6 +593,8 @@ export class API {
   }
 
   private normalizeAlbum(item: any): Album {
+    // API coverArt may be missing; first song ID reads real cover from filesystem
+    const firstSongId = item.song?.[0]?.id
     return {
       id: item.id,
       name: item.name,
@@ -589,7 +602,8 @@ export class API {
       artists: item.artists?.length
         ? item.artists
         : [{ id: item.artistId, name: item.artist }],
-      image: this.getCoverArtUrl(item),
+      image: this.getCoverArtUrl(item) ||
+        (firstSongId && this.getCoverArtUrl({ coverArt: firstSongId })),
       year: item.year || 0,
       favourite: !!item.starred,
       genres: this.normalizeGenres(item),
@@ -632,7 +646,9 @@ export class API {
       albums: (item.album || []).map(this.normalizeAlbum, this),
       similarArtist: (item.similarArtist || []).map(this.normalizeArtist, this),
       topTracks: (item.topSongs || []).slice(0, 5).map(this.normalizeTrack, this),
-      image: item.coverArt ? this.getCoverArtUrl(item) : item.artistImageUrl
+      image: item.coverArt
+        ? this.getCoverArtUrl(item)
+        : (item.artistImageUrl || this.getCoverArtUrl({ coverArt: `ar-${item.id}` }))
     }
   }
 
@@ -645,7 +661,9 @@ export class API {
       updatedAt: response.changed || '',
       trackCount: response.songCount,
       duration: response.duration,
-      image: response.songCount > 0 ? this.getCoverArtUrl(response) : undefined,
+      image: response.songCount > 0
+        ? (this.getCoverArtUrl(response) || this.getCoverArtUrl({ coverArt: `pl-${response.id}` }))
+        : undefined,
       isPublic: response.public,
       isReadOnly: false,
     }
@@ -687,7 +705,7 @@ export class API {
     const { server, urlParams } = this.auth
     return `${server}/rest/download` +
       `?id=${id}` +
-      '&v=1.15.0' +
+      '&v=1.16.1' +
       `&${urlParams}` +
       `&c=${this.clientName}`
   }
@@ -699,7 +717,7 @@ export class API {
     const { server, urlParams } = this.auth
     return `${server}/rest/getCoverArt` +
       `?id=${item.coverArt}` +
-      '&v=1.15.0' +
+      '&v=1.16.1' +
       `&${urlParams}` +
       `&c=${this.clientName}` +
       '&size=300'
@@ -709,7 +727,7 @@ export class API {
     const { server, urlParams } = this.auth
     return `${server}/rest/stream` +
       `?id=${id}` +
-      '&v=1.15.0' +
+      '&v=1.16.1' +
       `&${urlParams}` +
       `&c=${this.clientName}`
   }
